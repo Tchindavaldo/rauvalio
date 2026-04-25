@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Rauvalio — Living Canvas</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg-deep: #0A0A0F;
+    --bg-surface: #12121A;
+    --bg-elev: #181822;
+    --bg-elev-2: #1F1F2B;
+    --line: #23232F;
+    --line-2: #2C2C3A;
+    --text: #E8E8F0;
+    --text-dim: #8A8AA0;
+    --text-mute: #5A5A70;
+    --accent: #4F8EF7;
+    --accent-2: #7AAFFF;
+    --accent-glow: rgba(79, 142, 247, 0.35);
+    --green: #3FD68A;
+    --amber: #F2B544;
+    --rose: #F26D6D;
+    --violet: #A988FF;
+  }
+  html, body { background: var(--bg-deep); color: var(--text); }
+  body { font-family: 'Space Grotesk', system-ui, sans-serif; overflow: hidden; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  .dot-grid {
+    background-image: radial-gradient(rgba(255,255,255,0.045) 1px, transparent 1px);
+    background-size: 22px 22px;
+    background-position: -1px -1px;
+  }
+  .glass {
+    background: rgba(20, 20, 28, 0.72);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .glass-strong {
+    background: rgba(24, 24, 34, 0.85);
+    backdrop-filter: blur(22px) saturate(160%);
+    -webkit-backdrop-filter: blur(22px) saturate(160%);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  /* Window traffic lights */
+  .tl { width: 12px; height: 12px; border-radius: 999px; display: inline-block; }
+  .tl-r { background: #FF5F57; }
+  .tl-y { background: #FEBC2E; }
+  .tl-g { background: #28C840; }
+
+  /* Phone frame */
+  .phone {
+    width: 256px;
+    background: #050507;
+    border: 1px solid #2A2A38;
+    border-radius: 38px;
+    padding: 8px;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,0.04) inset,
+      0 30px 60px -20px rgba(0,0,0,0.6),
+      0 8px 24px -8px rgba(0,0,0,0.5);
+    position: relative;
+  }
+  .phone-screen {
+    border-radius: 30px;
+    overflow: hidden;
+    background: #fff;
+    width: 240px;
+    height: 480px;
+    position: relative;
+  }
+  .phone-notch {
+    position: absolute;
+    top: 14px; left: 50%; transform: translateX(-50%);
+    width: 90px; height: 22px;
+    background: #050507;
+    border-radius: 999px;
+    z-index: 10;
+  }
+  .phone-status {
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 36px; display: flex; align-items: center;
+    justify-content: space-between; padding: 10px 22px 0;
+    font-family: 'Space Grotesk'; font-size: 11px; font-weight: 600;
+    color: #111; z-index: 11;
+  }
+  .phone-status.dark { color: #fff; }
+
+  .selected-glow {
+    box-shadow:
+      0 0 0 1px var(--accent),
+      0 0 0 6px rgba(79,142,247,0.10),
+      0 0 60px -10px var(--accent-glow),
+      0 30px 60px -20px rgba(0,0,0,0.6);
+    border-color: var(--accent);
+  }
+
+  .card-label {
+    font-family: 'JetBrains Mono';
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+
+  /* Animations */
+  @keyframes flow {
+    to { stroke-dashoffset: -28; }
+  }
+  .arrow-flow {
+    stroke-dasharray: 6 8;
+    animation: flow 1.4s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin 0.9s linear infinite; }
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 0.4; transform: scale(0.8); }
+    50% { opacity: 1; transform: scale(1.1); }
+  }
+  .pulse-dot { animation: pulse-dot 1.4s ease-in-out infinite; }
+  @keyframes caret { 50% { opacity: 0; } }
+  .caret { animation: caret 1.05s steps(1) infinite; }
+  @keyframes glow-pulse {
+    0%, 100% { box-shadow: 0 0 0 1px var(--accent), 0 0 0 6px rgba(79,142,247,0.08), 0 0 60px -10px var(--accent-glow), 0 30px 60px -20px rgba(0,0,0,0.6); }
+    50% { box-shadow: 0 0 0 1px var(--accent), 0 0 0 8px rgba(79,142,247,0.14), 0 0 80px -10px var(--accent-glow), 0 30px 60px -20px rgba(0,0,0,0.6); }
+  }
+  .glow-pulse { animation: glow-pulse 3s ease-in-out infinite; }
+
+  /* Scrollbar hidden for canvas */
+  .canvas-scroll::-webkit-scrollbar { display: none; }
+  .canvas-scroll { scrollbar-width: none; }
+
+  /* Tiny segmented mobile UI bits */
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 999px; font-size: 9px; }
+  .skel { background: linear-gradient(90deg, #F0F0F4 0%, #E6E6EE 50%, #F0F0F4 100%); }
+  .price { font-variant-numeric: tabular-nums; }
+
+  /* Suggestion pill */
+  .suggest-pill {
+    border: 1px solid var(--line-2);
+    color: var(--text-dim);
+    background: rgba(255,255,255,0.02);
+    transition: all 0.15s ease;
+  }
+  .suggest-pill:hover { color: var(--text); border-color: var(--accent); background: rgba(79,142,247,0.08); }
+
+  .icon-btn {
+    display: flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 8px; color: var(--text-mute);
+    transition: all 0.15s ease;
+  }
+  .icon-btn:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+  .icon-btn.active { color: var(--accent); background: rgba(79,142,247,0.12); }
+  .icon-btn.active::before {
+    content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+    width: 2px; height: 18px; background: var(--accent); border-radius: 2px;
+  }
+
+  /* primary button */
+  .btn-primary {
+    background: linear-gradient(180deg, #5A98FA 0%, #4F8EF7 100%);
+    color: white;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, 0 6px 14px -4px rgba(79,142,247,0.5);
+  }
+  .btn-primary:hover { filter: brightness(1.05); }
+  .btn-ghost {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--line-2);
+    color: var(--text-dim);
+  }
+  .btn-ghost:hover { color: var(--text); }
+
+  /* Selection ring on hover */
+  .phone-hover { transition: transform 0.25s cubic-bezier(.2,.7,.3,1.2), box-shadow 0.25s; }
+  .phone-hover:hover { transform: translateY(-3px); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="phone-screens.jsx"></script>
+<script type="text/babel" src="rauvalio-app.jsx"></script>
+</body>
+</html>
