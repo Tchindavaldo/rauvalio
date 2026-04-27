@@ -157,7 +157,7 @@ interface Props {
 }
 
 interface ScanResponse {
-  classifications: Array<{ filePath: string; role: string; confidence: number; reason: string }>
+  classifications: Array<{ filePath: string; role: string; confidence: number; reason: string; label?: string; semanticConfidence?: number }>
   edges: Array<{ from: string; to: string; label: string; anchor: string; type: string }>
   scannedAt: string
 }
@@ -172,7 +172,7 @@ function buildNodesFromScan(scan: ScanResponse): Node[] {
       type: 'phoneFrame',
       position: PAGE_POSITIONS[i] ?? { x: 200 + i * 500, y: 300 },
       data: {
-        name: fileToName(c.filePath),
+        name: c.label ?? fileToName(c.filePath),
         file: c.filePath.split('/').pop() ?? c.filePath,
         status: 'analyzed',
         screen: screenKey,

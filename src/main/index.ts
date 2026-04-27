@@ -5,51 +5,63 @@ import { resolve } from 'path'
 import { scanDirectory } from '../../packages/agents/cartographer/ASTReaderAgent'
 import { classifyFiles } from '../../packages/agents/cartographer/PageIdentifierAgent'
 import { detectNavigation } from '../../packages/agents/cartographer/NavigationAgent'
+import { labelPages } from '../../packages/agents/cartographer/SemanticLabelAgent'
 
 // __dirname = out/main/ en dev et en prod — remonter à la racine du projet
 config({ path: resolve(__dirname, '../../.env') })
 
-// --- IPC handlers ---
+// --- IPC handlers (registered after app.whenReady) ---
 
-ipcMain.handle('open-project', async () => {
-  const result = await dialog.showOpenDialog({
-    title: 'Ouvrir un projet',
-    properties: ['openDirectory'],
-    buttonLabel: 'Ouvrir dans Rauvalio',
+function registerIpcHandlers(): void {
+  ipcMain.handle('open-project', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Ouvrir un projet',
+      properties: ['openDirectory'],
+      buttonLabel: 'Ouvrir dans Rauvalio',
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
   })
-  if (result.canceled || result.filePaths.length === 0) return null
-  return result.filePaths[0]
-})
 
-ipcMain.handle('scan-project', async (_event, rootDir?: string) => {
-  const target = rootDir ?? join(__dirname, '../../src/renderer/src/screens')
+  ipcMain.handle('scan-project', async (_event, rootDir?: string) => {
+    const target = rootDir ?? join(__dirname, '../../src/renderer/src/screens')
 
-  const scanResult = await scanDirectory(target)
-  const classificationResult = await classifyFiles(scanResult)
-  const navigationResult = await detectNavigation(scanResult, classificationResult)
+    const scanResult = await scanDirectory(target)
+    const classificationResult = await classifyFiles(scanResult)
+    const navigationResult = await detectNavigation(scanResult, classificationResult)
+    const semanticResult = await labelPages(scanResult.files, classificationResult.classifications, navigationResult.edges)
 
-  return {
-    files: scanResult.files,
-    classifications: classificationResult.classifications,
-    edges: navigationResult.edges,
-    scannedAt: scanResult.scannedAt,
-  }
-})
+    // Merge labels into classifications
+    const labelMap = new Map(semanticResult.labels.map((l) => [l.filePath, l]))
+    const classificationsWithLabels = classificationResult.classifications.map((c) => ({
+      ...c,
+      label: labelMap.get(c.filePath)?.label ?? null,
+      semanticConfidence: labelMap.get(c.filePath)?.confidence ?? 0,
+    }))
 
-ipcMain.handle('ask-agent', (_event, { name, payload }: { name: string; payload: unknown }) => ({
-  agent: name,
-  response: `Agent ${name} processed: ${JSON.stringify(payload)}`
-}))
+    return {
+      files: scanResult.files,
+      classifications: classificationsWithLabels,
+      edges: navigationResult.edges,
+      scannedAt: scanResult.scannedAt,
+    }
+  })
 
-ipcMain.handle('get-memory', () => ({
-  sessionId: 'sess-001',
-  tokens: 2100,
-  entries: [
-    { key: 'project', value: 'maison-vitelli' },
-    { key: 'framework', value: 'React Native / Expo' },
-    { key: 'scanned', value: '5 pages, 6 routes' }
-  ]
-}))
+  ipcMain.handle('ask-agent', (_event, { name, payload }: { name: string; payload: unknown }) => ({
+    agent: name,
+    response: `Agent ${name} processed: ${JSON.stringify(payload)}`
+  }))
+
+  ipcMain.handle('get-memory', () => ({
+    sessionId: 'sess-001',
+    tokens: 2100,
+    entries: [
+      { key: 'project', value: 'maison-vitelli' },
+      { key: 'framework', value: 'React Native / Expo' },
+      { key: 'scanned', value: '5 pages, 6 routes' }
+    ]
+  }))
+}
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -89,7 +101,10 @@ function createWindow(): void {
   })
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  registerIpcHandlers()
+  createWindow()
+})
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

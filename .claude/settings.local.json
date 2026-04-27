@@ -4,7 +4,10 @@
       "Bash(npm install *)",
       "Bash(npm run *)",
       "Bash(npx ts-node *)",
-      "Bash(npx tsx *)"
+      "Bash(npx tsx *)",
+      "Bash(pkill -f \"node.*electron-vite\")",
+      "Bash(node -c out/main/index.js)",
+      "Bash(node -e \"const electron = require\\('electron'\\); console.log\\('electron.ipcMain =', typeof electron.ipcMain\\)\")"
     ]
   }
 }
