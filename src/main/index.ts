@@ -1,7 +1,9 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { config } from 'dotenv'
 import { resolve } from 'path'
+import { spawn, ChildProcess } from 'child_process'
+import { existsSync, readFileSync } from 'fs'
 import { scanDirectory } from '../../packages/agents/cartographer/ASTReaderAgent'
 import { classifyFiles } from '../../packages/agents/cartographer/PageIdentifierAgent'
 import { detectNavigation } from '../../packages/agents/cartographer/NavigationAgent'
@@ -9,6 +11,122 @@ import { labelPages } from '../../packages/agents/cartographer/SemanticLabelAgen
 
 // __dirname = out/main/ en dev et en prod — remonter à la racine du projet
 config({ path: resolve(__dirname, '../../.env') })
+
+// --- Dev server management ---
+
+interface DevServerState {
+  process: ChildProcess | null
+  port: number | null
+  framework: string | null
+}
+
+const devServers = new Map<string, DevServerState>()
+
+type Framework = 'next' | 'expo' | 'vite' | 'unknown'
+
+function detectFramework(projectPath: string): Framework {
+  if (existsSync(join(projectPath, 'next.config.js')) || existsSync(join(projectPath, 'next.config.ts'))) {
+    return 'next'
+  }
+  const packageJsonPath = join(projectPath, 'package.json')
+  if (existsSync(packageJsonPath)) {
+    try {
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'))
+      if (existsSync(join(projectPath, 'app.json')) && packageJson.dependencies?.expo) {
+        return 'expo'
+      }
+    } catch { /* ignore */ }
+  }
+  if (existsSync(join(projectPath, 'vite.config.ts')) || existsSync(join(projectPath, 'vite.config.js'))) {
+    return 'vite'
+  }
+  return 'unknown'
+}
+
+async function waitForPort(port: number, timeout = 30000): Promise<boolean> {
+  const startTime = Date.now()
+  while (Date.now() - startTime < timeout) {
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 1000)
+      const response = await fetch(`http://localhost:${port}`, { method: 'HEAD', signal: controller.signal })
+      clearTimeout(timeoutId)
+      return response.ok || response.status === 404
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+  }
+  return false
+}
+
+function spawnDevServer(projectPath: string, framework: Framework): { process: ChildProcess; port: number } {
+  let cmd: string
+  let args: string[] = []
+  let port = 3000
+
+  if (framework === 'next') {
+    cmd = 'npm'
+    args = ['run', 'dev']
+    port = 3000
+  } else if (framework === 'expo') {
+    cmd = 'npm'
+    args = ['run', 'web']
+    port = 8081
+  } else if (framework === 'vite') {
+    cmd = 'npm'
+    args = ['run', 'dev']
+    port = 5173
+  } else {
+    throw new Error(`Unknown framework: ${framework}`)
+  }
+
+  const childProcess = spawn(cmd, args, {
+    cwd: projectPath,
+    stdio: 'pipe',
+    shell: true,
+  })
+
+  return { process: childProcess, port }
+}
+
+async function startDevServer(projectPath: string): Promise<{ port: number; framework: string }> {
+  // Check if already running
+  const existing = devServers.get(projectPath)
+  if (existing?.process && existing.port) {
+    return { port: existing.port, framework: existing.framework ?? 'unknown' }
+  }
+
+  const framework = detectFramework(projectPath)
+  if (framework === 'unknown') {
+    throw new Error('Could not detect framework (Next.js, Expo, or Vite required)')
+  }
+
+  const { process: childProcess, port } = spawnDevServer(projectPath, framework)
+
+  devServers.set(projectPath, {
+    process: childProcess,
+    port,
+    framework,
+  })
+
+  // Wait for port to be ready
+  const ready = await waitForPort(port)
+  if (!ready) {
+    childProcess.kill()
+    devServers.delete(projectPath)
+    throw new Error(`Dev server did not start on port ${port} within 30s`)
+  }
+
+  return { port, framework }
+}
+
+function killDevServer(projectPath: string): void {
+  const state = devServers.get(projectPath)
+  if (state?.process) {
+    state.process.kill()
+    devServers.delete(projectPath)
+  }
+}
 
 // --- IPC handlers (registered after app.whenReady) ---
 
@@ -61,6 +179,15 @@ function registerIpcHandlers(): void {
       { key: 'scanned', value: '5 pages, 6 routes' }
     ]
   }))
+
+  ipcMain.handle('start-dev-server', async (_event, projectPath: string) => {
+    try {
+      const result = await startDevServer(projectPath)
+      return result
+    } catch (error) {
+      throw new Error(`Failed to start dev server: ${(error as Error).message}`)
+    }
+  })
 }
 
 function createWindow(): void {
@@ -112,4 +239,11 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) createWindow()
+})
+
+app.on('before-quit', () => {
+  // Kill all dev servers when Rauvalio closes
+  devServers.forEach((state, projectPath) => {
+    killDevServer(projectPath)
+  })
 })

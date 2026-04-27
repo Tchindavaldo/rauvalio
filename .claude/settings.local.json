@@ -7,7 +7,8 @@
       "Bash(npx tsx *)",
       "Bash(pkill -f \"node.*electron-vite\")",
       "Bash(node -c out/main/index.js)",
-      "Bash(node -e \"const electron = require\\('electron'\\); console.log\\('electron.ipcMain =', typeof electron.ipcMain\\)\")"
+      "Bash(node -e \"const electron = require\\('electron'\\); console.log\\('electron.ipcMain =', typeof electron.ipcMain\\)\")",
+      "Bash(node --max-old-space-size=4096 -e \"try { const m = require\\('./out/main/index.js'\\); console.log\\('OK'\\); } catch \\(e\\) { console.error\\(e.message\\); console.error\\(e.stack.split\\('\\\\n'\\).slice\\(0, 10\\).join\\('\\\\n'\\)\\); }\")"
     ]
   }
 }

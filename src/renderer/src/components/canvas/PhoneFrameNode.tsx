@@ -1,7 +1,12 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { Handle, Position, NodeProps } from '@xyflow/react'
 
 type Status = 'analyzed' | 'analyzing' | 'pending'
+
+interface DevServerInfo {
+  port: number
+  framework: string
+}
 
 const handleStyle: React.CSSProperties = {
   background: 'transparent',
@@ -49,16 +54,139 @@ function PagePlaceholder({ name, file }: { name: string; file: string }) {
   )
 }
 
+function LoadingSpinner() {
+  return (
+    <div style={{
+      width: '100%', height: '100%',
+      background: 'linear-gradient(135deg, #1F1F2B 0%, #2A2A3A 100%)',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 12,
+      color: '#fff',
+    }}>
+      <div style={{
+        width: 40, height: 40,
+        border: '2px solid rgba(79,142,247,0.2)',
+        borderTop: '2px solid var(--accent)',
+        borderRadius: '50%',
+        animation: 'spin 1s linear infinite',
+      }} />
+      <div style={{ fontSize: 11, color: 'var(--text-mute)' }}>
+        Démarrage du dev server...
+      </div>
+    </div>
+  )
+}
+
 export default function PhoneFrameNode(props: NodeProps) {
   const name = props.data.name as string
   const file = props.data.file as string
   const status = props.data.status as Status
   const selected = props.data.selected as boolean | undefined
+  const projectPath = props.data.projectPath as string | undefined
+
+  const [devServer, setDevServer] = useState<DevServerInfo | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!projectPath) {
+      setDevServer(null)
+      return
+    }
+
+    setLoading(true)
+
+    // Delayed startup to avoid race conditions
+    const timer = setTimeout(async () => {
+      try {
+        const rauvalio = (window as any).rauvalio
+        if (!rauvalio?.startDevServer) {
+          setError('startDevServer not available')
+          setLoading(false)
+          return
+        }
+
+        const result = await rauvalio.startDevServer(projectPath)
+        setDevServer(result)
+        setError(null)
+      } catch (err) {
+        setError((err as Error).message)
+      } finally {
+        setLoading(false)
+      }
+    }, 500)
+
+    return () => clearTimeout(timer)
+  }, [projectPath])
 
   const statusColor =
     status === 'analyzed' ? 'var(--green)'
     : status === 'analyzing' ? 'var(--amber)'
     : 'var(--text-mute)'
+
+  const screenContent = (() => {
+    if (error) {
+      return (
+        <div style={{
+          width: '100%', height: '100%',
+          background: 'linear-gradient(135deg, #1F1F2B 0%, #2A2A3A 100%)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 12,
+          color: '#f26d6d',
+          fontSize: 10,
+          textAlign: 'center',
+        }}>
+          Error: {error}
+        </div>
+      )
+    }
+
+    if (loading) {
+      return <LoadingSpinner />
+    }
+
+    if (!devServer) {
+      // No dev server, show placeholder
+      return <PagePlaceholder name={name} file={file} />
+    }
+
+    // Real iframe
+    const iframeUrl = `http://localhost:${devServer.port}/`
+    return (
+      <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+        <iframe
+          src={iframeUrl}
+          style={{
+            width: '100%',
+            height: '100%',
+            border: 'none',
+            borderRadius: 12,
+          }}
+          sandbox="allow-scripts allow-same-origin allow-forms"
+          title={name}
+        />
+        {/* Click overlay to intercept interactions */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 0, left: 0, right: 0, bottom: 0,
+            cursor: 'pointer',
+            opacity: 0,
+            pointerEvents: 'all',
+          }}
+          onClick={(e) => {
+            // For now, just log. Later: identify component and open AIContextDialog
+            console.log('Clicked on', name, 'at', e.clientX, e.clientY)
+          }}
+        />
+      </div>
+    )
+  })()
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
@@ -66,7 +194,7 @@ export default function PhoneFrameNode(props: NodeProps) {
       <div className={`phone phone-hover${selected ? ' glow-pulse' : ''}`}>
         <div className="phone-screen">
           <div className="phone-notch" />
-          <PagePlaceholder name={name} file={file} />
+          {screenContent}
         </div>
       </div>
 

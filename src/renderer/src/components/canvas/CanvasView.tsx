@@ -162,7 +162,7 @@ interface ScanResponse {
   scannedAt: string
 }
 
-function buildNodesFromScan(scan: ScanResponse): Node[] {
+function buildNodesFromScan(scan: ScanResponse, projectPath: string): Node[] {
   const pages = scan.classifications.filter((c) => c.role === 'page')
 
   const pageNodes: Node[] = pages.map((c, i) => {
@@ -177,6 +177,7 @@ function buildNodesFromScan(scan: ScanResponse): Node[] {
         status: 'analyzed',
         screen: screenKey,
         selected: i === 1,
+        projectPath,
       },
     }
   })
@@ -239,7 +240,7 @@ export default function CanvasView({ rootDir }: Props) {
 
       // Step 3 — render
       setScanStep(3)
-      const builtNodes = buildNodesFromScan(scan)
+      const builtNodes = buildNodesFromScan(scan, rootDir)
       const builtEdges = buildEdgesFromScan(scan)
 
       setNodes(builtNodes)
