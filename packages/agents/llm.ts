@@ -7,26 +7,25 @@ const isProduction = process.env['NODE_ENV'] === 'production'
 
 function createClient() {
   if (isProduction) {
-    // Prod : OpenAI-compatible wrapper sur Anthropic (ou remplacer par @anthropic-ai/sdk)
     return new OpenAI({
       apiKey: process.env['ANTHROPIC_API_KEY'] ?? '',
       baseURL: 'https://api.anthropic.com/v1',
     })
   }
-  // Dev : Groq (gratuit, Llama 3.3 70B)
+  // Dev : Ollama local (qwen2.5-coder:7b) — pas de rate limit, pas de clé
   return new OpenAI({
-    apiKey: process.env['GROQ_API_KEY'] ?? '',
-    baseURL: 'https://api.groq.com/openai/v1',
+    apiKey: 'ollama',
+    baseURL: 'http://localhost:11434/v1',
   })
 }
 
-export const MODEL = isProduction ? 'claude-sonnet-4-6' : 'llama-3.3-70b-versatile'
+export const MODEL = isProduction ? 'claude-sonnet-4-6' : 'qwen2.5-coder:7b'
 
 export async function chat(system: string, user: string): Promise<string> {
   const client = createClient()
   const response = await client.chat.completions.create({
     model: MODEL,
-    max_tokens: 1024,
+    max_tokens: 4096,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },

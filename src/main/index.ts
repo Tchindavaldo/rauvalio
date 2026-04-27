@@ -2,8 +2,9 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join, dirname } from 'path'
 import { config } from 'dotenv'
 import { resolve } from 'path'
-import { spawn, ChildProcess } from 'child_process'
+import { spawn, ChildProcess, execSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
+import { createConnection } from 'net'
 import { scanDirectory } from '../../packages/agents/cartographer/ASTReaderAgent'
 import { classifyFiles } from '../../packages/agents/cartographer/PageIdentifierAgent'
 import { detectNavigation } from '../../packages/agents/cartographer/NavigationAgent'
@@ -21,6 +22,7 @@ interface DevServerState {
 }
 
 const devServers = new Map<string, DevServerState>()
+const pendingDevServers = new Map<string, Promise<{ port: number; framework: string }>>()
 
 type Framework = 'next' | 'expo' | 'vite' | 'unknown'
 
@@ -43,18 +45,35 @@ function detectFramework(projectPath: string): Framework {
   return 'unknown'
 }
 
-async function waitForPort(port: number, timeout = 30000): Promise<boolean> {
+function killProcessOnPort(port: number): void {
+  try {
+    if (process.platform === 'win32') {
+      execSync(
+        `for /f "tokens=5" %a in ('netstat -ano ^| findstr :${port} ^| findstr LISTENING') do taskkill /F /PID %a`,
+        { encoding: 'utf-8', stdio: 'pipe', shell: 'cmd.exe' } as never
+      )
+    } else {
+      execSync(`lsof -ti :${port} | xargs -r kill -9`, { encoding: 'utf-8', stdio: 'pipe' })
+    }
+    console.log(`[devserver] Killed process on port ${port}`)
+  } catch {
+    // No process on this port — fine
+  }
+}
+
+async function waitForPort(port: number, timeout = 90000): Promise<boolean> {
+  // TCP-poll the port instead of fetch (which CORS-fails in Electron and lies
+  // about readiness). Only return true once the server actually accepts TCP
+  // AND we've given Metro a grace period to finish its first bundle.
   const startTime = Date.now()
   while (Date.now() - startTime < timeout) {
-    try {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 1000)
-      const response = await fetch(`http://localhost:${port}`, { method: 'HEAD', signal: controller.signal })
-      clearTimeout(timeoutId)
-      return response.ok || response.status === 404
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 500))
-    }
+    const isUp = await new Promise<boolean>((resolve) => {
+      const socket = createConnection({ port, host: 'localhost' })
+      socket.once('connect', () => { socket.destroy(); resolve(true) })
+      socket.once('error', () => { resolve(false) })
+    })
+    if (isUp) return true
+    await new Promise((resolve) => setTimeout(resolve, 500))
   }
   return false
 }
@@ -84,22 +103,49 @@ function spawnDevServer(projectPath: string, framework: Framework): { process: C
     cwd: projectPath,
     stdio: 'pipe',
     shell: true,
+    env: { ...process.env, EXPO_NONINTERACTIVE: 'true', BROWSER: 'none' },
+  })
+
+  childProcess.stdout?.on('data', (data) => {
+    console.log(`[${framework}:${port}] ${data.toString().trim()}`)
+  })
+  childProcess.stderr?.on('data', (data) => {
+    console.error(`[${framework}:${port}] ERR: ${data.toString().trim()}`)
   })
 
   return { process: childProcess, port }
 }
 
 async function startDevServer(projectPath: string): Promise<{ port: number; framework: string }> {
-  // Check if already running
+  // Coalesce concurrent calls (each PhoneFrameNode invokes this) so all frames
+  // wait on the SAME initialization promise. Otherwise the first call does the
+  // real work while the rest race ahead with a half-ready Map entry.
+  const pending = pendingDevServers.get(projectPath)
+  if (pending) return pending
+
   const existing = devServers.get(projectPath)
   if (existing?.process && existing.port) {
     return { port: existing.port, framework: existing.framework ?? 'unknown' }
   }
 
+  const promise = doStartDevServer(projectPath).finally(() => {
+    pendingDevServers.delete(projectPath)
+  })
+  pendingDevServers.set(projectPath, promise)
+  return promise
+}
+
+async function doStartDevServer(projectPath: string): Promise<{ port: number; framework: string }> {
   const framework = detectFramework(projectPath)
   if (framework === 'unknown') {
     throw new Error('Could not detect framework (Next.js, Expo, or Vite required)')
   }
+
+  // Kill any leftover process from a previous Rauvalio session
+  const defaultPort = framework === 'expo' ? 8081 : framework === 'vite' ? 5173 : 3000
+  killProcessOnPort(defaultPort)
+  // Give the OS a moment to actually release the port
+  await new Promise((resolve) => setTimeout(resolve, 500))
 
   const { process: childProcess, port } = spawnDevServer(projectPath, framework)
 
@@ -109,13 +155,17 @@ async function startDevServer(projectPath: string): Promise<{ port: number; fram
     framework,
   })
 
-  // Wait for port to be ready
+  // 1) Wait for TCP socket to accept connections
   const ready = await waitForPort(port)
   if (!ready) {
     childProcess.kill()
     devServers.delete(projectPath)
-    throw new Error(`Dev server did not start on port ${port} within 30s`)
+    throw new Error(`Dev server did not start on port ${port} within 90s`)
   }
+
+  // 2) Grace period so Metro/Vite finishes its first bundle before iframes
+  //    hit the URL (avoids ERR_CONNECTION_RESET on the first request).
+  await new Promise((resolve) => setTimeout(resolve, 5000))
 
   return { port, framework }
 }

@@ -84,7 +84,8 @@ export async function classifyFiles(scanResult: ScanResult): Promise<Classificat
     try {
       const raw = await chat(SYSTEM_PROMPT, buildUserMessage(batch))
       allClassifications.push(...parseClassifications(raw, batch))
-    } catch {
+    } catch (err) {
+      console.error('[PageIdentifierAgent] batch failed:', (err as Error)?.message ?? err)
       allClassifications.push(...fallback(batch))
     }
   }

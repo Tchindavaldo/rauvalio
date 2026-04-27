@@ -229,10 +229,14 @@ export default function CanvasView({ rootDir }: Props) {
     setScanStep(0)
 
     rauvalio.scanProject(rootDir).then((scan) => {
+      console.log('[CanvasView] scan result:', scan)
+      console.log('[CanvasView] rootDir:', rootDir)
+      console.log('[CanvasView] pages found:', scan?.classifications?.filter((c: any) => c.role === 'page'))
       // Step 1 — classify done, step 2 — nav done (both happened server-side)
       setScanStep(2)
 
       if (!scan?.classifications) {
+        console.warn('[CanvasView] no classifications in scan result')
         setScanStep(3)
         setDone(true)
         return
