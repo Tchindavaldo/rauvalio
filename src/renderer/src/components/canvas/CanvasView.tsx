@@ -1,4 +1,5 @@
-import React, { useCallback } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import ScanningView from './ScanningView'
 import {
   ReactFlow,
   Background,
@@ -27,7 +28,8 @@ const edgeTypes: Record<string, React.ComponentType<any>> = {
   navigation: NavigationEdge,
 }
 
-const initialNodes: Node[] = [
+// Fallback static data shown while IPC scan is in progress
+const FALLBACK_NODES: Node[] = [
   {
     id: 'home',
     type: 'phoneFrame',
@@ -69,7 +71,7 @@ const initialNodes: Node[] = [
   },
 ]
 
-const initialEdges: Edge[] = [
+const FALLBACK_EDGES: Edge[] = [
   {
     id: 'home-product',
     source: 'home',
@@ -126,13 +128,143 @@ const initialEdges: Edge[] = [
   },
 ]
 
-export default function CanvasView() {
-  const [nodes, setNodes] = React.useState<Node[]>(initialNodes)
+// Maps a bare filename → the screen key used by PhoneFrameNode
+function fileToScreenKey(filePath: string): string {
+  const name = filePath.split('/').pop()?.replace('.tsx', '').replace('.ts', '') ?? ''
+  return name.replace('Screen', '').toLowerCase()
+}
+
+// Derives a readable page name from filePath
+function fileToName(filePath: string): string {
+  const base = filePath.split('/').pop()?.replace('.tsx', '').replace('Screen', '') ?? filePath
+  return base.charAt(0).toUpperCase() + base.slice(1)
+}
+
+// Positions arranged in a loose arc so edges don't overlap
+const PAGE_POSITIONS: Record<number, { x: number; y: number }> = {
+  0: { x: 60, y: 220 },
+  1: { x: 600, y: 220 },
+  2: { x: 1500, y: 60 },
+  3: { x: 1500, y: 580 },
+  4: { x: 600, y: 800 },
+  5: { x: 60, y: 750 },
+  6: { x: 1100, y: 400 },
+  7: { x: 1100, y: 900 },
+}
+
+interface Props {
+  rootDir: string
+}
+
+interface ScanResponse {
+  classifications: Array<{ filePath: string; role: string; confidence: number; reason: string }>
+  edges: Array<{ from: string; to: string; label: string; anchor: string; type: string }>
+  scannedAt: string
+}
+
+function buildNodesFromScan(scan: ScanResponse): Node[] {
+  const pages = scan.classifications.filter((c) => c.role === 'page')
+
+  const pageNodes: Node[] = pages.map((c, i) => {
+    const screenKey = fileToScreenKey(c.filePath)
+    return {
+      id: c.filePath,
+      type: 'phoneFrame',
+      position: PAGE_POSITIONS[i] ?? { x: 200 + i * 500, y: 300 },
+      data: {
+        name: fileToName(c.filePath),
+        file: c.filePath.split('/').pop() ?? c.filePath,
+        status: 'analyzed',
+        screen: screenKey,
+        selected: i === 1,
+      },
+    }
+  })
+
+  const aiContextNode: Node = {
+    id: 'ai-context',
+    type: 'aiContext',
+    position: { x: 916, y: 250 },
+    data: {},
+    draggable: false,
+    selectable: false,
+    focusable: false,
+  }
+
+  return [...pageNodes, aiContextNode]
+}
+
+function buildEdgesFromScan(scan: ScanResponse): Edge[] {
+  return scan.edges.map((e, i) => ({
+    id: `edge-${i}`,
+    source: e.from,
+    sourceHandle: `source-${e.anchor}`,
+    target: e.to,
+    targetHandle: 'target-default',
+    type: 'navigation',
+    data: { label: e.label, dim: e.type === 'conditional' },
+  }))
+}
+
+export default function CanvasView({ rootDir }: Props) {
+  const [nodes, setNodes] = useState<Node[]>([])
+  const [edges, setEdges] = useState<Edge[]>([])
+  const [scanMeta, setScanMeta] = useState<{ pages: number; routes: number; conditionals: number } | null>(null)
+  const [scanStep, setScanStep] = useState(0)   // 0=AST 1=classify 2=nav 3=render
+  const [scanError, setScanError] = useState<string | undefined>()
+  const [done, setDone] = useState(false)
+  const didScan = useRef(false)
+
+  useEffect(() => {
+    if (didScan.current) return
+    didScan.current = true
+
+    const rauvalio = (window as unknown as {
+      rauvalio: { scanProject: (dir?: string) => Promise<ScanResponse & { fileCount?: number }> }
+    }).rauvalio
+    if (!rauvalio) { setDone(true); return }
+
+    // Step 0 — AST (running immediately)
+    setScanStep(0)
+
+    rauvalio.scanProject(rootDir).then((scan) => {
+      // Step 1 — classify done, step 2 — nav done (both happened server-side)
+      setScanStep(2)
+
+      if (!scan?.classifications) {
+        setScanStep(3)
+        setDone(true)
+        return
+      }
+
+      // Step 3 — render
+      setScanStep(3)
+      const builtNodes = buildNodesFromScan(scan)
+      const builtEdges = buildEdgesFromScan(scan)
+
+      setNodes(builtNodes)
+      setEdges(builtEdges)
+      setScanMeta({
+        pages: scan.classifications.filter((c) => c.role === 'page').length,
+        routes: scan.edges.length,
+        conditionals: scan.edges.filter((e) => e.type === 'conditional').length,
+      })
+
+      // Brief pause so user sees step 3 complete before canvas appears
+      setTimeout(() => setDone(true), 600)
+    }).catch((err: Error) => {
+      setScanError(err?.message ?? 'Erreur inconnue')
+    })
+  }, [rootDir])
 
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => setNodes(nds => applyNodeChanges(changes, nds)),
     []
   )
+
+  if (!done) {
+    return <ScanningView currentStep={scanStep} error={scanError} />
+  }
 
   return (
     <div style={{ flex: 1, position: 'relative' }}>
@@ -150,7 +282,7 @@ export default function CanvasView() {
 
       <ReactFlow
         nodes={nodes}
-        edges={initialEdges}
+        edges={edges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
@@ -174,7 +306,6 @@ export default function CanvasView() {
           color="rgba(255,255,255,0.045)"
         />
 
-        {/* Section header — viewport-fixed overlay */}
         <div style={{
           position: 'absolute', left: 24, top: 56,
           fontSize: 10, color: 'var(--text-mute)',
@@ -182,7 +313,9 @@ export default function CanvasView() {
           zIndex: 16, pointerEvents: 'none',
           fontFamily: 'JetBrains Mono, monospace'
         }}>
-          ◇ Flux d'achat — 5 écrans · 6 transitions
+          {scanMeta
+            ? `◇ ${scanMeta.pages} écrans · ${scanMeta.routes} transitions`
+            : '◇ Canvas'}
         </div>
 
         <CanvasToolbar />
@@ -190,14 +323,14 @@ export default function CanvasView() {
         <CanvasMinimap />
         <GlobalChat />
 
-        {/* Bottom status hints */}
         <div style={{ position: 'absolute', bottom: 14, left: 14, display: 'flex', gap: 8, zIndex: 15 }}>
           <div className="glass mono" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 8, fontSize: 10, color: 'var(--text-dim)' }}>
-            <span style={{ color: 'var(--green)' }}>●</span> 5 pages
+            <span style={{ color: 'var(--green)' }}>●</span>
+            {scanMeta?.pages ?? 0} pages
             <span style={{ color: 'var(--text-mute)' }}>·</span>
-            <span>6 routes</span>
+            <span>{scanMeta?.routes ?? 0} routes</span>
             <span style={{ color: 'var(--text-mute)' }}>·</span>
-            <span>1 conditional</span>
+            <span>{scanMeta?.conditionals ?? 0} conditional</span>
           </div>
           <div className="glass mono" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 10px', borderRadius: 8, fontSize: 10, color: 'var(--text-dim)' }}>
             <span>drag to pan</span>

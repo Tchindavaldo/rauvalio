@@ -1,14 +1,40 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
+import { config } from 'dotenv'
+import { resolve } from 'path'
+import { scanDirectory } from '../../packages/agents/cartographer/ASTReaderAgent'
+import { classifyFiles } from '../../packages/agents/cartographer/PageIdentifierAgent'
+import { detectNavigation } from '../../packages/agents/cartographer/NavigationAgent'
 
-// --- Stubbed IPC handlers ---
+// __dirname = out/main/ en dev et en prod — remonter à la racine du projet
+config({ path: resolve(__dirname, '../../.env') })
 
-ipcMain.handle('scan-project', () => ({
-  pages: 5,
-  routes: 6,
-  conditionals: 1,
-  screens: ['HomeScreen', 'ProductScreen', 'CartScreen', 'CheckoutScreen', 'LoginScreen']
-}))
+// --- IPC handlers ---
+
+ipcMain.handle('open-project', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Ouvrir un projet',
+    properties: ['openDirectory'],
+    buttonLabel: 'Ouvrir dans Rauvalio',
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+})
+
+ipcMain.handle('scan-project', async (_event, rootDir?: string) => {
+  const target = rootDir ?? join(__dirname, '../../src/renderer/src/screens')
+
+  const scanResult = await scanDirectory(target)
+  const classificationResult = await classifyFiles(scanResult)
+  const navigationResult = await detectNavigation(scanResult, classificationResult)
+
+  return {
+    files: scanResult.files,
+    classifications: classificationResult.classifications,
+    edges: navigationResult.edges,
+    scannedAt: scanResult.scannedAt,
+  }
+})
 
 ipcMain.handle('ask-agent', (_event, { name, payload }: { name: string; payload: unknown }) => ({
   agent: name,

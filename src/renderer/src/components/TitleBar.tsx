@@ -1,6 +1,14 @@
 import React from 'react'
 
-export default function TitleBar() {
+interface Props {
+  projectPath: string | null
+}
+
+export default function TitleBar({ projectPath }: Props) {
+  const projectName = projectPath
+    ? projectPath.split(/[\\/]/).filter(Boolean).pop() ?? projectPath
+    : null
+
   return (
     <div
       className="titlebar-drag"
@@ -29,17 +37,25 @@ export default function TitleBar() {
           </svg>
           <span style={{ fontWeight: 600, letterSpacing: 0.4 }}>Rauvalio</span>
         </div>
-        <span style={{ color: 'var(--text-mute)' }}>·</span>
-        <span className="mono" style={{ fontSize: 10, color: 'var(--text-dim)' }}>~/projects/maison-vitelli</span>
-        <span style={{ marginLeft: 4, padding: '1px 6px', fontSize: 9, borderRadius: 3, background: 'rgba(63, 214, 138, 0.12)', color: 'var(--green)', fontFamily: 'JetBrains Mono, monospace' }}>main</span>
+
+        {projectName && (
+          <>
+            <span style={{ color: 'var(--text-mute)' }}>·</span>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--text-dim)' }}>
+              {projectName}
+            </span>
+          </>
+        )}
       </div>
 
       <div className="titlebar-no-drag" style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14, fontSize: 10, color: 'var(--text-dim)' }}>
         <span className="mono">⌘K</span>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <span className="pulse-dot" style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--green)', display: 'inline-block' }}/>
-          Synced
-        </span>
+        {projectName && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span className="pulse-dot" style={{ width: 6, height: 6, borderRadius: 999, background: 'var(--green)', display: 'inline-block' }}/>
+            Synced
+          </span>
+        )}
       </div>
     </div>
   )

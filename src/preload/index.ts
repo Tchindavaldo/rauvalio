@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('rauvalio', {
-  scanProject: () => ipcRenderer.invoke('scan-project'),
+  openProject: (): Promise<string | null> => ipcRenderer.invoke('open-project'),
+  scanProject: (rootDir?: string) => ipcRenderer.invoke('scan-project', rootDir),
   askAgent: (name: string, payload: unknown) =>
     ipcRenderer.invoke('ask-agent', { name, payload }),
   getMemory: () => ipcRenderer.invoke('get-memory'),
