@@ -101,54 +101,46 @@ function parseJSXElement(node: Node, depth: number): JSXElement | null {
 }
 
 function extractNavigationCalls(sourceFile: SourceFile): NavigationCall[] {
+  // Single descendant walk — much faster than 3 separate getDescendantsOfKind calls.
   const calls: NavigationCall[] = []
-
   try {
-    sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression).forEach((call) => {
-      try {
-        const expr = call.getExpression().getText()
-        const args = call.getArguments()
-        const target = args[0]?.getText().replace(/^["'`]|["'`]$/g, '') ?? ''
-
-        if (expr === 'router.push' || expr === 'router.replace') {
-          calls.push({ type: 'router.push', target, line: call.getStartLineNumber() })
-        } else if (expr === 'navigate' || expr === 'navigation.navigate') {
-          calls.push({ type: 'navigate', target, line: call.getStartLineNumber() })
-        }
-      } catch { /* skip */ }
+    sourceFile.forEachDescendant((node) => {
+      const kind = node.getKind()
+      if (kind === SyntaxKind.CallExpression) {
+        try {
+          const call = node.asKindOrThrow(SyntaxKind.CallExpression)
+          const expr = call.getExpression().getText()
+          if (expr === 'router.push' || expr === 'router.replace') {
+            const target = call.getArguments()[0]?.getText().replace(/^["'`]|["'`]$/g, '') ?? ''
+            calls.push({ type: 'router.push', target, line: call.getStartLineNumber() })
+          } else if (expr === 'navigate' || expr === 'navigation.navigate') {
+            const target = call.getArguments()[0]?.getText().replace(/^["'`]|["'`]$/g, '') ?? ''
+            calls.push({ type: 'navigate', target, line: call.getStartLineNumber() })
+          }
+        } catch { /* skip */ }
+      } else if (kind === SyntaxKind.JsxElement || kind === SyntaxKind.JsxSelfClosingElement) {
+        try {
+          const isJsxEl = kind === SyntaxKind.JsxElement
+          const tagName = isJsxEl
+            ? node.asKindOrThrow(SyntaxKind.JsxElement).getOpeningElement().getTagNameNode().getText()
+            : node.asKindOrThrow(SyntaxKind.JsxSelfClosingElement).getTagNameNode().getText()
+          if (tagName !== 'Link') return
+          const attrs = isJsxEl
+            ? node.asKindOrThrow(SyntaxKind.JsxElement).getOpeningElement().getAttributes()
+            : node.asKindOrThrow(SyntaxKind.JsxSelfClosingElement).getAttributes()
+          for (const attr of attrs) {
+            if (attr.getKind() !== SyntaxKind.JsxAttribute) continue
+            const a = attr.asKindOrThrow(SyntaxKind.JsxAttribute)
+            const attrName = a.getNameNode().getText()
+            if (attrName !== 'href' && attrName !== 'to') continue
+            const init = a.getInitializer()
+            const target = init ? init.getText().replace(/^["'`{]|["'`}]$/g, '') : ''
+            calls.push({ type: attrName === 'href' ? 'href' : 'Link', target, line: a.getStartLineNumber() })
+          }
+        } catch { /* skip */ }
+      }
     })
-
-    // <Link href/to>
-    const linkElements = [
-      ...sourceFile.getDescendantsOfKind(SyntaxKind.JsxElement),
-      ...sourceFile.getDescendantsOfKind(SyntaxKind.JsxSelfClosingElement),
-    ]
-    for (const el of linkElements) {
-      try {
-        const isJsxEl = el.getKind() === SyntaxKind.JsxElement
-        const tagName = isJsxEl
-          ? el.asKindOrThrow(SyntaxKind.JsxElement).getOpeningElement().getTagNameNode().getText()
-          : el.asKindOrThrow(SyntaxKind.JsxSelfClosingElement).getTagNameNode().getText()
-
-        if (tagName !== 'Link') continue
-
-        const attrs = isJsxEl
-          ? el.asKindOrThrow(SyntaxKind.JsxElement).getOpeningElement().getAttributes()
-          : el.asKindOrThrow(SyntaxKind.JsxSelfClosingElement).getAttributes()
-
-        for (const attr of attrs) {
-          if (attr.getKind() !== SyntaxKind.JsxAttribute) continue
-          const a = attr.asKindOrThrow(SyntaxKind.JsxAttribute)
-          const attrName = a.getNameNode().getText()
-          if (attrName !== 'href' && attrName !== 'to') continue
-          const init = a.getInitializer()
-          const target = init ? init.getText().replace(/^["'`{]|["'`}]$/g, '') : ''
-          calls.push({ type: attrName === 'href' ? 'href' : 'Link', target, line: a.getStartLineNumber() })
-        }
-      } catch { /* skip */ }
-    }
   } catch { /* skip entire file */ }
-
   return calls
 }
 
@@ -214,21 +206,32 @@ function parseFile(sourceFile: SourceFile, rootDir: string): FileAST {
   return { filePath, imports, exports, jsxTree, props, navigationCalls }
 }
 
-export async function scanDirectory(rootDir: string): Promise<ScanResult> {
+export async function scanDirectory(rootDir: string, targetPaths?: string[]): Promise<ScanResult> {
   const project = new Project({
     skipAddingFilesFromTsConfig: true,
     compilerOptions: { jsx: 4 /* JsxEmit.ReactJSX */, allowJs: true },
   })
 
-  project.addSourceFilesAtPaths([
-    `${rootDir}/**/*.ts`,
-    `${rootDir}/**/*.tsx`,
-    `${rootDir}/**/*.js`,
-    `${rootDir}/**/*.jsx`,
-  ])
+  if (targetPaths && targetPaths.length > 0) {
+    // Targeted mode — only parse the files chosen by DiscoveryAgent.
+    // `targetPaths` are relative to rootDir with forward slashes.
+    const absolutePaths = targetPaths.map((p) => `${rootDir}/${p}`)
+    project.addSourceFilesAtPaths(absolutePaths)
+  } else {
+    // Fallback full-project scan (legacy behavior)
+    const negatives = EXCLUDED_DIRS.map((d) => `!${rootDir}/**/${d}/**`)
+    project.addSourceFilesAtPaths([
+      `${rootDir}/**/*.ts`,
+      `${rootDir}/**/*.tsx`,
+      ...negatives,
+    ])
+  }
 
-  // Filter out excluded dirs and cap at MAX_FILES
-  const allFiles = project.getSourceFiles().filter((sf) => !shouldExclude(sf.getFilePath()))
+  // Skip .d.ts files (no JSX, just types)
+  const allFiles = project.getSourceFiles().filter((sf) => {
+    const fp = sf.getFilePath()
+    return !shouldExclude(fp) && !fp.endsWith('.d.ts')
+  })
   const filesToParse = allFiles.slice(0, MAX_FILES)
 
   const files: FileAST[] = []

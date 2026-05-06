@@ -156,33 +156,107 @@ interface Props {
   rootDir: string
 }
 
+interface ScreenInfo {
+  filePath: string
+  screenId: string
+  screenLabel: string
+  screenType: 'route' | 'modal' | 'sheet' | 'overlay' | 'tab' | 'panel' | 'step' | 'unknown'
+  parentScreenId?: string
+  trigger?: string
+}
+
 interface ScanResponse {
-  classifications: Array<{ filePath: string; role: string; confidence: number; reason: string; label?: string; semanticConfidence?: number }>
+  classifications: Array<{ filePath: string; role: string; confidence: number; reason: string; label?: string; semanticConfidence?: number; screenId?: string; screenType?: ScreenInfo['screenType']; parentScreenId?: string; trigger?: string }>
   edges: Array<{ from: string; to: string; label: string; anchor: string; type: string }>
+  screens?: ScreenInfo[]
   scannedAt: string
 }
 
-function buildNodesFromScan(scan: ScanResponse, projectPath: string): Node[] {
-  const pages = scan.classifications.filter((c) => c.role === 'page')
+// Layout constants — main screens go on a wide horizontal flow, children are
+// arranged in a small grid around their parent.
+const MAIN_GAP_X = 600
+const MAIN_GAP_Y = 700
+const MAIN_PER_ROW = 4
+const CHILD_OFFSET_X = 360
+const CHILD_OFFSET_Y = 0
+const CHILD_GAP_X = 280
+const CHILD_GAP_Y = 220
 
-  const pageNodes: Node[] = pages.map((c, i) => {
-    const screenKey = fileToScreenKey(c.filePath)
-    return {
-      id: c.filePath,
+function buildNodesFromScan(scan: ScanResponse, projectPath: string): Node[] {
+  const screens: ScreenInfo[] = scan.screens && scan.screens.length > 0
+    ? scan.screens
+    // Backwards compatibility: synthesise one screen per classification
+    : scan.classifications.map((c) => ({
+        filePath: c.filePath,
+        screenId: c.screenId ?? `${c.filePath}#main`,
+        screenLabel: c.label ?? fileToName(c.filePath),
+        screenType: (c.screenType ?? 'route') as ScreenInfo['screenType'],
+        parentScreenId: c.parentScreenId,
+        trigger: c.trigger,
+      }))
+
+  const mainScreens = screens.filter((s) => !s.parentScreenId)
+  const childrenByParent = new Map<string, ScreenInfo[]>()
+  for (const s of screens) {
+    if (!s.parentScreenId) continue
+    const arr = childrenByParent.get(s.parentScreenId) ?? []
+    arr.push(s)
+    childrenByParent.set(s.parentScreenId, arr)
+  }
+
+  const nodes: Node[] = []
+  mainScreens.forEach((main, i) => {
+    const col = i % MAIN_PER_ROW
+    const row = Math.floor(i / MAIN_PER_ROW)
+    const mainPos = { x: 60 + col * MAIN_GAP_X, y: 220 + row * MAIN_GAP_Y }
+
+    nodes.push({
+      id: main.screenId,
       type: 'phoneFrame',
-      position: PAGE_POSITIONS[i] ?? { x: 200 + i * 500, y: 300 },
+      position: mainPos,
       data: {
-        name: c.label ?? fileToName(c.filePath),
-        file: c.filePath.split('/').pop() ?? c.filePath,
+        name: main.screenLabel,
+        file: main.filePath.split('/').pop() ?? main.filePath,
         status: 'analyzed',
-        screen: screenKey,
-        selected: i === 1,
+        screen: fileToScreenKey(main.filePath),
+        selected: i === 0,
         projectPath,
+        screenType: main.screenType,
+        screenId: main.screenId,
+        isChild: false,
       },
-    }
+    })
+
+    // Lay out children in a 2-column grid to the right of the parent
+    const children = childrenByParent.get(main.screenId) ?? []
+    children.forEach((child, ci) => {
+      const childCol = ci % 2
+      const childRow = Math.floor(ci / 2)
+      nodes.push({
+        id: child.screenId,
+        type: 'phoneFrame',
+        position: {
+          x: mainPos.x + CHILD_OFFSET_X + childCol * CHILD_GAP_X,
+          y: mainPos.y + CHILD_OFFSET_Y + childRow * CHILD_GAP_Y,
+        },
+        data: {
+          name: child.screenLabel,
+          file: child.filePath.split('/').pop() ?? child.filePath,
+          status: 'analyzed',
+          screen: fileToScreenKey(child.filePath),
+          selected: false,
+          projectPath,
+          screenType: child.screenType,
+          screenId: child.screenId,
+          parentScreenId: child.parentScreenId,
+          trigger: child.trigger,
+          isChild: true,
+        },
+      })
+    })
   })
 
-  const aiContextNode: Node = {
+  nodes.push({
     id: 'ai-context',
     type: 'aiContext',
     position: { x: 916, y: 250 },
@@ -190,9 +264,9 @@ function buildNodesFromScan(scan: ScanResponse, projectPath: string): Node[] {
     draggable: false,
     selectable: false,
     focusable: false,
-  }
+  })
 
-  return [...pageNodes, aiContextNode]
+  return nodes
 }
 
 function buildEdgesFromScan(scan: ScanResponse): Edge[] {

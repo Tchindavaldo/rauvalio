@@ -80,18 +80,65 @@ function LoadingSpinner() {
   )
 }
 
+const SCREEN_TYPE_BADGE: Record<string, { label: string; color: string }> = {
+  route: { label: 'route', color: '#4F8EF7' },
+  modal: { label: 'modal', color: '#B084F7' },
+  sheet: { label: 'sheet', color: '#84C7F7' },
+  overlay: { label: 'overlay', color: '#F77C84' },
+  tab: { label: 'tab', color: '#F7C684' },
+  panel: { label: 'panel', color: '#84F7B0' },
+  step: { label: 'step', color: '#F784D0' },
+  unknown: { label: '?', color: '#666' },
+}
+
+function ChildScreenPreview({ name, file, screenType, trigger }: { name: string; file: string; screenType?: string; trigger?: string }) {
+  const badge = SCREEN_TYPE_BADGE[screenType ?? 'unknown'] ?? SCREEN_TYPE_BADGE.unknown
+  return (
+    <div style={{
+      width: '100%', height: '100%',
+      background: 'linear-gradient(135deg, #181822 0%, #20202C 100%)',
+      display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      gap: 10, padding: 16, color: '#fff',
+    }}>
+      <div style={{
+        fontSize: 9, padding: '3px 8px', borderRadius: 999,
+        background: badge.color + '22', color: badge.color,
+        fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase', letterSpacing: 0.8,
+      }}>{badge.label}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, textAlign: 'center', lineHeight: 1.3 }}>{name}</div>
+      <div style={{ fontSize: 9, color: '#888', fontFamily: 'JetBrains Mono, monospace' }}>{file}</div>
+      {trigger && (
+        <div style={{
+          fontSize: 9, color: '#999', textAlign: 'center', lineHeight: 1.4,
+          marginTop: 6, padding: '6px 10px', background: 'rgba(0,0,0,0.25)', borderRadius: 4,
+        }}>{trigger}</div>
+      )}
+    </div>
+  )
+}
+
 export default function PhoneFrameNode(props: NodeProps) {
   const name = props.data.name as string
   const file = props.data.file as string
   const status = props.data.status as Status
   const selected = props.data.selected as boolean | undefined
   const projectPath = props.data.projectPath as string | undefined
+  const screenType = props.data.screenType as string | undefined
+  const isChild = props.data.isChild as boolean | undefined
+  const trigger = props.data.trigger as string | undefined
 
   const [devServer, setDevServer] = useState<DevServerInfo | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    // Child screens (tabs/overlays/steps) don't get their own iframe — they
+    // share the parent's URL and live as preview cards on the canvas.
+    if (isChild) {
+      setLoading(false)
+      return
+    }
     if (!projectPath) {
       setDevServer(null)
       return
@@ -128,6 +175,9 @@ export default function PhoneFrameNode(props: NodeProps) {
     : 'var(--text-mute)'
 
   const screenContent = (() => {
+    if (isChild) {
+      return <ChildScreenPreview name={name} file={file} screenType={screenType} trigger={trigger} />
+    }
     if (error) {
       return (
         <div style={{
@@ -208,6 +258,14 @@ export default function PhoneFrameNode(props: NodeProps) {
           <span style={{ fontWeight: 600, fontSize: 13, color: selected ? '#fff' : 'var(--text)' }}>
             {name}
           </span>
+          {screenType && SCREEN_TYPE_BADGE[screenType] && (
+            <span style={{
+              fontSize: 8, padding: '2px 6px', borderRadius: 999,
+              background: SCREEN_TYPE_BADGE[screenType].color + '22',
+              color: SCREEN_TYPE_BADGE[screenType].color,
+              fontFamily: 'JetBrains Mono, monospace', textTransform: 'uppercase', letterSpacing: 0.6,
+            }}>{SCREEN_TYPE_BADGE[screenType].label}</span>
+          )}
         </div>
         <div className="mono" style={{ fontSize: 10, color: 'var(--text-mute)' }}>{file}</div>
       </div>

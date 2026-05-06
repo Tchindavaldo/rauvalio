@@ -6,9 +6,10 @@ import { spawn, ChildProcess, execSync } from 'child_process'
 import { existsSync, readFileSync } from 'fs'
 import { createConnection } from 'net'
 import { scanDirectory } from '../../packages/agents/cartographer/ASTReaderAgent'
-import { classifyFiles } from '../../packages/agents/cartographer/PageIdentifierAgent'
 import { detectNavigation } from '../../packages/agents/cartographer/NavigationAgent'
 import { labelPages } from '../../packages/agents/cartographer/SemanticLabelAgent'
+import { discoverScreens, type ScreenCandidate } from '../../packages/agents/cartographer/DiscoveryAgent'
+import type { FileClassification } from '../../packages/agents/cartographer/PageIdentifierAgent'
 
 // __dirname = out/main/ en dev et en prod — remonter à la racine du projet
 config({ path: resolve(__dirname, '../../.env') })
@@ -194,23 +195,78 @@ function registerIpcHandlers(): void {
   ipcMain.handle('scan-project', async (_event, rootDir?: string) => {
     const target = rootDir ?? join(__dirname, '../../src/renderer/src/screens')
 
-    const scanResult = await scanDirectory(target)
-    const classificationResult = await classifyFiles(scanResult)
-    const navigationResult = await detectNavigation(scanResult, classificationResult)
-    const semanticResult = await labelPages(scanResult.files, classificationResult.classifications, navigationResult.edges)
+    // Phase 1+2+3: semantic discovery — returns logical screens (route, modal,
+    // tab, overlay, panel, step) decomposed from the project's source files.
+    const discovery = await discoverScreens(target)
+    console.log(`[scan-project] discovered ${discovery.screens.length} screens`)
 
-    // Merge labels into classifications
-    const labelMap = new Map(semanticResult.labels.map((l) => [l.filePath, l]))
-    const classificationsWithLabels = classificationResult.classifications.map((c) => ({
-      ...c,
-      label: labelMap.get(c.filePath)?.label ?? null,
-      semanticConfidence: labelMap.get(c.filePath)?.confidence ?? 0,
+    // Deduplicate file paths for AST parsing (one file may produce N screens)
+    const candidatePaths = Array.from(new Set(discovery.screens.map((s) => s.filePath)))
+    const scanResult = await scanDirectory(target, candidatePaths)
+
+    // Build classifications from the discovered screens — every screen is
+    // treated as a page-like surface in the canvas. This replaces the old
+    // PageIdentifierAgent step.
+    const classifications: Array<FileClassification & {
+      label: string | null
+      semanticConfidence: number
+      screenId?: string
+      screenType?: ScreenCandidate['screenType']
+      parentScreenId?: string
+      trigger?: string
+    }> = discovery.screens.map((s) => ({
+      filePath: s.filePath,
+      role: 'page',
+      confidence: 1,
+      reason: `Discovered as ${s.screenType}`,
+      label: s.screenLabel,
+      semanticConfidence: 1,
+      screenId: s.screenId,
+      screenType: s.screenType,
+      parentScreenId: s.parentScreenId,
+      trigger: s.trigger,
     }))
+
+    const navigationResult = await detectNavigation(scanResult, {
+      // NavigationAgent expects a ClassificationResult shape with one entry per file
+      classifications: candidatePaths.map((fp) => ({
+        filePath: fp,
+        role: 'page' as const,
+        confidence: 1,
+        reason: 'discovered',
+      })),
+    })
+
+    // Optional semantic enrichment — only run if we have main screens to label
+    const mainFiles = scanResult.files.filter((f) =>
+      candidatePaths.includes(f.filePath)
+    )
+    let labelMap = new Map<string, { label: string; confidence: number }>()
+    try {
+      const semanticResult = await labelPages(
+        mainFiles,
+        candidatePaths.map((fp) => ({ filePath: fp, role: 'page' as const, confidence: 1, reason: '' })),
+        navigationResult.edges,
+      )
+      labelMap = new Map(semanticResult.labels.map((l) => [l.filePath, l]))
+    } catch (err) {
+      console.warn('[scan-project] SemanticLabelAgent failed, using discovery labels:', (err as Error)?.message ?? err)
+    }
+
+    // Prefer semantic label if more confident than discovery's
+    const enriched = classifications.map((c) => {
+      const sem = labelMap.get(c.filePath)
+      if (sem && sem.confidence > c.semanticConfidence && !c.parentScreenId) {
+        return { ...c, label: sem.label, semanticConfidence: sem.confidence }
+      }
+      return c
+    })
 
     return {
       files: scanResult.files,
-      classifications: classificationsWithLabels,
+      classifications: enriched,
       edges: navigationResult.edges,
+      screens: discovery.screens,
       scannedAt: scanResult.scannedAt,
     }
   })

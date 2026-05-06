@@ -8,7 +8,11 @@
       "Bash(pkill -f \"node.*electron-vite\")",
       "Bash(node -c out/main/index.js)",
       "Bash(node -e \"const electron = require\\('electron'\\); console.log\\('electron.ipcMain =', typeof electron.ipcMain\\)\")",
-      "Bash(node --max-old-space-size=4096 -e \"try { const m = require\\('./out/main/index.js'\\); console.log\\('OK'\\); } catch \\(e\\) { console.error\\(e.message\\); console.error\\(e.stack.split\\('\\\\n'\\).slice\\(0, 10\\).join\\('\\\\n'\\)\\); }\")"
+      "Bash(node --max-old-space-size=4096 -e \"try { const m = require\\('./out/main/index.js'\\); console.log\\('OK'\\); } catch \\(e\\) { console.error\\(e.message\\); console.error\\(e.stack.split\\('\\\\n'\\).slice\\(0, 10\\).join\\('\\\\n'\\)\\); }\")",
+      "Bash(git check-ignore *)",
+      "Bash(grep -E \"^\\\\.env$|^\\\\.env\\\\b\" .gitignore)",
+      "Bash(curl -s https://api.cerebras.ai/v1/models -H \"Authorization: Bearer csk-dtxdtkxjme64h9ht8ne9m8jf8824pf5njn49395j59hnm6xf\")",
+      "Bash(npx tsc *)"
     ]
   }
 }
